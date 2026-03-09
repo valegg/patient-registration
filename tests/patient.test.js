@@ -10,6 +10,10 @@ process.env.DB_HOST = "localhost";
 const app = require("../src/app");
 
 // --- Mocks ---
+jest.mock("../src/models", () => ({
+  sequelize: { authenticate: jest.fn().mockResolvedValue(undefined) },
+}));
+
 jest.mock("../src/models/Patient", () => {
   const patients = [];
   let idCounter = 1;
@@ -26,7 +30,7 @@ jest.mock("../src/models/Patient", () => {
     findByPk: jest.fn((id) =>
       Promise.resolve(patients.find((p) => p.id === parseInt(id)) || null)
     ),
-    findAll: jest.fn(() => Promise.resolve([...patients])),
+    findAndCountAll: jest.fn(() => Promise.resolve({ rows: [...patients], count: patients.length })),
     _reset: () => {
       patients.length = 0;
       idCounter = 1;
@@ -34,12 +38,14 @@ jest.mock("../src/models/Patient", () => {
   };
 });
 
-jest.mock("../src/notifications/NotificationService", () => ({
-  notifyPatientRegistered: jest.fn().mockResolvedValue(undefined),
+jest.mock("../src/queues/emailQueue", () => ({
+  add: jest.fn().mockResolvedValue({ id: "job-1" }),
 }));
 
 const Patient = require("../src/models/Patient");
-const notificationService = require("../src/notifications/NotificationService");
+const emailQueue = require("../src/queues/emailQueue");
+
+const API_KEY = "demo-api-key";
 
 beforeEach(() => {
   Patient._reset();
@@ -70,6 +76,21 @@ describe("POST /api/v1/patients/", () => {
     expect(res.body.name).toBe("Jane Doe");
     expect(res.body.email).toBe("jane@example.com");
     expect(res.body).toHaveProperty("id");
+  });
+
+  test("enqueues a notification after successful registration", async () => {
+    await attachFile(
+      request(app)
+        .post("/api/v1/patients/")
+        .field("name", "Jane Doe")
+        .field("email", "jane@example.com")
+        .field("phone", "+1234567890")
+    );
+
+    expect(emailQueue.add).toHaveBeenCalledWith(
+      "notify-patient-registered",
+      expect.objectContaining({ patient: expect.objectContaining({ email: "jane@example.com" }) })
+    );
   });
 
   test("returns 409 when email is already registered", async () => {
@@ -153,8 +174,8 @@ describe("POST /api/v1/patients/", () => {
     expect(res.body).toHaveProperty("errors");
   });
 
-  test("returns 201 even when notification fails", async () => {
-    notificationService.notifyPatientRegistered.mockRejectedValueOnce(new Error("SMTP error"));
+  test("returns 201 even when queue enqueue fails", async () => {
+    emailQueue.add.mockRejectedValueOnce(new Error("Redis error"));
 
     const res = await attachFile(
       request(app)
@@ -178,6 +199,40 @@ describe("POST /api/v1/patients/", () => {
     expect(res.status).toBe(422);
     expect(res.body).toHaveProperty("errors");
   });
+
+  test("deletes uploaded file when DB creation fails", async () => {
+    const unlinkSpy = jest.spyOn(fs, "unlink").mockImplementation((filePath, cb) => cb && cb(null));
+    Patient.create.mockRejectedValueOnce(new Error("DB error"));
+
+    const res = await attachFile(
+      request(app)
+        .post("/api/v1/patients/")
+        .field("name", "Jane Doe")
+        .field("email", "jane@example.com")
+        .field("phone", "+1234567890")
+    );
+
+    expect(res.status).toBe(500);
+    expect(unlinkSpy).toHaveBeenCalled();
+    unlinkSpy.mockRestore();
+  });
+
+  test("deletes uploaded file on duplicate email (409)", async () => {
+    const unlinkSpy = jest.spyOn(fs, "unlink").mockImplementation((filePath, cb) => cb && cb(null));
+    Patient.findOne.mockResolvedValueOnce({ id: 1, email: "jane@example.com" });
+
+    const res = await attachFile(
+      request(app)
+        .post("/api/v1/patients/")
+        .field("name", "Jane Doe")
+        .field("email", "jane@example.com")
+        .field("phone", "+1234567890")
+    );
+
+    expect(res.status).toBe(409);
+    expect(unlinkSpy).toHaveBeenCalled();
+    unlinkSpy.mockRestore();
+  });
 });
 
 describe("GET /api/v1/patients/:id", () => {
@@ -189,41 +244,79 @@ describe("GET /api/v1/patients/:id", () => {
       phone: "+1234567890",
     });
 
-    const res = await request(app).get("/api/v1/patients/1");
+    const res = await request(app)
+      .get("/api/v1/patients/1")
+      .set("x-api-key", API_KEY);
     expect(res.status).toBe(200);
     expect(res.body.email).toBe("jane@example.com");
   });
 
+  test("returns 401 when API key is missing", async () => {
+    const res = await request(app).get("/api/v1/patients/1");
+    expect(res.status).toBe(401);
+  });
+
+  test("returns 401 when API key is wrong", async () => {
+    const res = await request(app)
+      .get("/api/v1/patients/1")
+      .set("x-api-key", "wrong-key");
+    expect(res.status).toBe(401);
+  });
+
   test("returns 404 when patient not found", async () => {
     Patient.findByPk.mockResolvedValueOnce(null);
-    const res = await request(app).get("/api/v1/patients/9999");
+    const res = await request(app)
+      .get("/api/v1/patients/9999")
+      .set("x-api-key", API_KEY);
     expect(res.status).toBe(404);
   });
 
   test("returns 404 when id is not a valid number", async () => {
     Patient.findByPk.mockResolvedValueOnce(null);
-    const res = await request(app).get("/api/v1/patients/abc");
+    const res = await request(app)
+      .get("/api/v1/patients/abc")
+      .set("x-api-key", API_KEY);
     expect(res.status).toBe(404);
   });
 });
 
 describe("GET /api/v1/patients/", () => {
-  test("returns list of patients", async () => {
-    Patient.findAll.mockResolvedValueOnce([
-      { id: 1, name: "A" },
-      { id: 2, name: "B" },
-    ]);
+  test("returns paginated list of patients", async () => {
+    Patient.findAndCountAll.mockResolvedValueOnce({
+      rows: [{ id: 1, name: "A" }, { id: 2, name: "B" }],
+      count: 2,
+    });
 
-    const res = await request(app).get("/api/v1/patients/");
+    const res = await request(app)
+      .get("/api/v1/patients/")
+      .set("x-api-key", API_KEY);
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body.patients).toHaveLength(2);
+    expect(res.body.total).toBe(2);
+    expect(res.body).toHaveProperty("offset");
+    expect(res.body).toHaveProperty("limit");
+  });
+
+  test("returns 401 when API key is missing", async () => {
+    const res = await request(app).get("/api/v1/patients/");
+    expect(res.status).toBe(401);
   });
 });
 
 describe("GET /health", () => {
-  test("returns ok", async () => {
+  test("returns ok when db is connected", async () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok" });
+    expect(res.body.status).toBe("ok");
+    expect(res.body.db).toBe("connected");
+  });
+
+  test("returns 503 when db is unreachable", async () => {
+    const { sequelize } = require("../src/models");
+    sequelize.authenticate.mockRejectedValueOnce(new Error("Connection refused"));
+
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe("degraded");
   });
 });

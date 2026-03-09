@@ -1,13 +1,15 @@
 const app = require("./app");
 const { sequelize } = require("./models");
+const { createEmailWorker } = require("./workers/emailWorker");
 const config = require("./config");
 const logger = require("./utils/logger");
 
 const PORT = config.PORT;
 
 sequelize
-  .sync()
+  .authenticate()
   .then(() => {
+    createEmailWorker();
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
     });

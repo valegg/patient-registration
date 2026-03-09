@@ -1,5 +1,7 @@
 const { Router } = require("express");
 const upload = require("../middlewares/upload");
+const apiKeyAuth = require("../middlewares/apiKeyAuth");
+const { registrationLimiter } = require("../middlewares/rateLimiter");
 const { registerPatient, getPatient, listPatients } = require("../controllers/patientController");
 
 const router = Router();
@@ -14,6 +16,12 @@ const router = Router();
 /**
  * @swagger
  * components:
+ *   securitySchemes:
+ *     ApiKeyAuth:
+ *       type: apiKey
+ *       in: header
+ *       name: x-api-key
+ *       description: "Development key: demo-api-key"
  *   schemas:
  *     Patient:
  *       type: object
@@ -33,6 +41,22 @@ const router = Router();
  *         documentPhoto:
  *           type: string
  *           example: uploads/photo.jpg
+ *     PaginatedPatients:
+ *       type: object
+ *       properties:
+ *         patients:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/Patient'
+ *         total:
+ *           type: integer
+ *           example: 42
+ *         offset:
+ *           type: integer
+ *           example: 0
+ *         limit:
+ *           type: integer
+ *           example: 20
  */
 
 /**
@@ -41,17 +65,30 @@ const router = Router();
  *   get:
  *     summary: Listar todos los pacientes
  *     tags: [Patients]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
  *     responses:
  *       200:
- *         description: Lista de pacientes
+ *         description: Lista paginada de pacientes
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Patient'
+ *               $ref: '#/components/schemas/PaginatedPatients'
+ *       401:
+ *         description: API key inválida o ausente
  */
-router.get("/", listPatients);
+router.get("/", apiKeyAuth, listPatients);
 
 /**
  * @swagger
@@ -59,6 +96,8 @@ router.get("/", listPatients);
  *   get:
  *     summary: Obtener un paciente por ID
  *     tags: [Patients]
+ *     security:
+ *       - ApiKeyAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -73,10 +112,12 @@ router.get("/", listPatients);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Patient'
+ *       401:
+ *         description: API key inválida o ausente
  *       404:
  *         description: Paciente no encontrado
  */
-router.get("/:id", getPatient);
+router.get("/:id", apiKeyAuth, getPatient);
 
 /**
  * @swagger
@@ -115,9 +156,13 @@ router.get("/:id", getPatient);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Patient'
- *       400:
+ *       409:
+ *         description: Email ya registrado
+ *       422:
  *         description: Datos inválidos
+ *       429:
+ *         description: Demasiados intentos de registro
  */
-router.post("/", upload.single("document_photo"), registerPatient);
+router.post("/", registrationLimiter, upload.single("document_photo"), registerPatient);
 
 module.exports = router;

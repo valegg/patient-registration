@@ -20,4 +20,11 @@ module.exports = {
   },
 
   uploadDir: process.env.UPLOAD_DIR || "uploads",
+
+  redis: {
+    host: process.env.REDIS_HOST || "localhost",
+    port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+  },
+
+  apiKey: process.env.API_KEY || "demo-api-key",
 };

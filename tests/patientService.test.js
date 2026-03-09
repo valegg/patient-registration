@@ -50,36 +50,37 @@ describe("getPatientById", () => {
 });
 
 describe("listPatients", () => {
-  test("calls findAll with default offset and limit", async () => {
-    Patient.findAll.mockResolvedValue([]);
+  test("calls findAndCountAll with default offset and limit", async () => {
+    Patient.findAndCountAll.mockResolvedValue({ rows: [], count: 0 });
 
     await listPatients();
 
-    expect(Patient.findAll).toHaveBeenCalledWith({
+    expect(Patient.findAndCountAll).toHaveBeenCalledWith({
       offset: 0,
       limit: 20,
       order: [["createdAt", "DESC"]],
     });
   });
 
-  test("calls findAll with provided offset and limit", async () => {
-    Patient.findAll.mockResolvedValue([]);
+  test("calls findAndCountAll with provided offset and limit", async () => {
+    Patient.findAndCountAll.mockResolvedValue({ rows: [], count: 0 });
 
     await listPatients({ offset: 10, limit: 5 });
 
-    expect(Patient.findAll).toHaveBeenCalledWith({
+    expect(Patient.findAndCountAll).toHaveBeenCalledWith({
       offset: 10,
       limit: 5,
       order: [["createdAt", "DESC"]],
     });
   });
 
-  test("returns the list from the model", async () => {
-    const patients = [{ id: 1 }, { id: 2 }];
-    Patient.findAll.mockResolvedValue(patients);
+  test("returns patients and total", async () => {
+    const rows = [{ id: 1 }, { id: 2 }];
+    Patient.findAndCountAll.mockResolvedValue({ rows, count: 2 });
 
     const result = await listPatients();
 
-    expect(result).toEqual(patients);
+    expect(result.patients).toEqual(rows);
+    expect(result.total).toBe(2);
   });
 });

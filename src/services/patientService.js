@@ -16,7 +16,12 @@ async function getPatientById(id) {
 }
 
 async function listPatients({ offset = 0, limit = 20 } = {}) {
-  return Patient.findAll({ offset, limit, order: [["createdAt", "DESC"]] });
+  const { rows: patients, count: total } = await Patient.findAndCountAll({
+    offset,
+    limit,
+    order: [["createdAt", "DESC"]],
+  });
+  return { patients, total };
 }
 
 module.exports = { createPatient, getPatientById, listPatients };

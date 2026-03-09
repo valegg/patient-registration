@@ -3,12 +3,20 @@ const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./config/swagger");
 const routes = require("./routes");
 const errorHandler = require("./middlewares/errorHandler");
+const { sequelize } = require("./models");
 
 const app = express();
 
 app.use(express.json());
 
-app.get("/health", (req, res) => res.json({ status: "ok" }));
+app.get("/health", async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({ status: "ok", db: "connected" });
+  } catch {
+    res.status(503).json({ status: "degraded", db: "disconnected" });
+  }
+});
 
 app.use(
   "/api-docs",
