@@ -24,7 +24,7 @@ async function registerPatient(req, res, next) {
     // The email is send asynchronously and we don't want to block the response, 
     // so we catch any errors to prevent unhandled promise rejections
     // Also, I add persisted in Redis and retried on failure, in order to not lose 
-    // the email if the worker is down at the moment of registration.
+    // the email if the worker is down at the moment of registration
     emailQueue
       .add("notify-patient-registered", { patient })
       .catch(() => {});
